@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -304,25 +305,35 @@ def send_header_to_discord(week_str):
     return r.json()
 
 
+def discord_bot_request(method, url, **kwargs):
+    """디스코드 봇 API 호출 + 429(rate limit)는 retry_after만큼 기다렸다가 자동 재시도."""
+    headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+    while True:
+        r = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+        if r.status_code == 429:
+            retry_after = r.json().get("retry_after", 1)
+            time.sleep(retry_after + 0.1)
+            continue
+        r.raise_for_status()
+        return r
+
+
 def send_message_as_bot(embed):
-    r = requests.post(
+    r = discord_bot_request(
+        "POST",
         f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages",
-        headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}"},
         json={"embeds": [embed]},
-        timeout=30,
     )
-    r.raise_for_status()
     return r.json()
 
 
 def add_reaction(message_id, emoji):
     encoded = quote(emoji, safe="")
-    r = requests.put(
+    discord_bot_request(
+        "PUT",
         f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{message_id}/reactions/{encoded}/@me",
-        headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}"},
-        timeout=30,
     )
-    r.raise_for_status()
+    time.sleep(0.35)  # 반응 추가 API의 촘촘한 rate limit(초당 몇 회)을 미리 피함
 
 
 def post_videos_with_reactions(channel, videos, color, option_labels, show_thumbnail):
