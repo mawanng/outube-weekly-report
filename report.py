@@ -196,6 +196,7 @@ def classify_main(videos, shorts_ids):
 
 
 def classify_sub(videos, shorts_ids, clip_ids, long_ids):
+    """쇼츠/짧클립/풀영상 재생목록 중 어디에도 없는 영상은 분류하지 않고 제외한다."""
     shorts_videos, clip_videos, long_videos = [], [], []
     for v in videos:
         vid = v["id"]
@@ -203,17 +204,18 @@ def classify_sub(videos, shorts_ids, clip_ids, long_ids):
             shorts_videos.append(v)
         elif vid in clip_ids:
             clip_videos.append(v)
-        else:
-            # long_ids에 없어도(아직 재생목록 정리 전이어도) 기본은 풀영상으로 취급
+        elif vid in long_ids:
             long_videos.append(v)
+        else:
+            print(f"[skip] 재생목록 미분류라 제외: {v['snippet']['title']}", file=sys.stderr)
     return long_videos, clip_videos, shorts_videos
 
 
-def build_main_embed(main_channel, main_long, main_shorts, week_str, date_range):
+def build_main_embed(main_channel, main_long, main_shorts, date_range):
     return {
         "author": {"name": main_channel["title"], "icon_url": main_channel["thumbnail_url"]},
         "title": "「 👤 본채널 업로드 」",
-        "description": f"**{week_str}**  ·  {date_range}",
+        "description": date_range,
         "color": COLOR_MAIN,
         "fields": [
             {"name": f"🎬 롱폼  ({len(main_long)})", "value": build_video_lines(main_long)},
@@ -222,11 +224,11 @@ def build_main_embed(main_channel, main_long, main_shorts, week_str, date_range)
     }
 
 
-def build_sub_embed(sub_channel, sub_long, sub_clip, sub_shorts, week_str, date_range):
+def build_sub_embed(sub_channel, sub_long, sub_clip, sub_shorts, date_range):
     return {
         "author": {"name": sub_channel["title"], "icon_url": sub_channel["thumbnail_url"]},
         "title": "「 🎮 봉풀주 업로드 」",
-        "description": f"**{week_str}**  ·  {date_range}",
+        "description": date_range,
         "color": COLOR_SUB,
         "fields": [
             {"name": f"✂️ 짧클립  ({len(sub_clip)})", "value": build_video_lines(sub_clip)},
@@ -236,10 +238,9 @@ def build_sub_embed(sub_channel, sub_long, sub_clip, sub_shorts, week_str, date_
     }
 
 
-def build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts, week_str):
+def build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts):
     return {
         "title": "「 📊 Total 」",
-        "description": f"**{week_str}** 총 업로드 요약",
         "color": COLOR_TOTAL,
         "fields": [
             {"name": "👤 본채널 롱폼", "value": f"**{len(main_long)}**개", "inline": True},
@@ -256,6 +257,14 @@ def build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts, we
 def send_embed_to_discord(embed):
     # thread_name은 포럼 채널 웹훅에서만 동작해서(일반 채널은 400 에러) 쓰지 않음.
     payload = {"embeds": [embed]}
+    r = requests.post(DISCORD_WEBHOOK_URL, params={"wait": "true"}, json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def send_header_to_discord(week_str):
+    # 임베드 제목보다 더 크게 보이도록 일반 메시지의 마크다운 헤더(# )로 전송.
+    payload = {"content": f"# 📅 {week_str} 주간 보고"}
     r = requests.post(DISCORD_WEBHOOK_URL, params={"wait": "true"}, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()
@@ -286,19 +295,18 @@ def main():
     )
 
     results = []
+    results.append(send_header_to_discord(week_str))
+    results.append(
+        send_embed_to_discord(build_main_embed(main_channel, main_long, main_shorts, date_range))
+    )
     results.append(
         send_embed_to_discord(
-            build_main_embed(main_channel, main_long, main_shorts, week_str, date_range)
+            build_sub_embed(sub_channel, sub_long, sub_clip, sub_shorts, date_range)
         )
     )
     results.append(
         send_embed_to_discord(
-            build_sub_embed(sub_channel, sub_long, sub_clip, sub_shorts, week_str, date_range)
-        )
-    )
-    results.append(
-        send_embed_to_discord(
-            build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts, week_str)
+            build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts)
         )
     )
     print(json.dumps(results, ensure_ascii=False, indent=2))
