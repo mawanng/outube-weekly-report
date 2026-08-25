@@ -229,12 +229,13 @@ def classify_sub(videos, shorts_ids, clip_ids, long_ids):
     return long_videos, clip_videos, shorts_videos
 
 
-def build_empty_channel_embed(channel, title, color, date_range):
-    """그 주에 영상이 하나도 없을 때만 쓰는 최소 안내 메시지."""
+def build_channel_header_embed(channel, title, color, date_range, has_uploads):
+    """채널 카드(헤더). 업로드가 없으면 안내 문구도 같이 넣는다."""
+    description = date_range if has_uploads else f"{date_range}\n＿ 이번 주 업로드 없음"
     return {
         "author": {"name": channel["title"], "icon_url": channel["thumbnail_url"]},
         "title": title,
-        "description": f"{date_range}\n＿ 이번 주 업로드 없음",
+        "description": description,
         "color": color,
     }
 
@@ -367,18 +368,22 @@ def main():
     # 1) 큰 주간 헤더
     send_header_to_discord(week_str)
 
-    # 2) 본채널 — 영상마다 메시지 1개(반응용). 아무것도 없으면 안내 메시지 1개만.
-    if main_long or main_shorts:
-        post_videos_with_reactions(
-            main_channel, main_long, COLOR_MAIN, THUMBNAILER_OPTIONS, show_thumbnail=True
+    # 2) 본채널 — 채널 카드 하나 + 영상마다 메시지 1개(반응용).
+    send_embed_to_discord(
+        build_channel_header_embed(
+            main_channel,
+            "「 👤 본채널 업로드 」",
+            COLOR_MAIN,
+            date_range,
+            has_uploads=bool(main_long or main_shorts),
         )
-        post_videos_with_reactions(
-            main_channel, main_shorts, COLOR_MAIN, CREATOR_OPTIONS, show_thumbnail=False
-        )
-    else:
-        send_embed_to_discord(
-            build_empty_channel_embed(main_channel, "「 👤 본채널 업로드 」", COLOR_MAIN, date_range)
-        )
+    )
+    post_videos_with_reactions(
+        main_channel, main_long, COLOR_MAIN, THUMBNAILER_OPTIONS, show_thumbnail=True
+    )
+    post_videos_with_reactions(
+        main_channel, main_shorts, COLOR_MAIN, CREATOR_OPTIONS, show_thumbnail=False
+    )
 
     # 3) 봉풀주 — 짧클립/풀영상은 한 메시지로 합치고, 쇼츠만 영상별 메시지(반응용).
     send_embed_to_discord(build_sub_lists_embed(sub_channel, sub_clip, sub_long, date_range))

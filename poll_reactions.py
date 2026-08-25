@@ -1,7 +1,7 @@
 """
 반응 확정 처리 봇
 - report.py가 올린 영상별 메시지(🅰️/🅱️ 반응이 달린 것)를 주기적으로 훑어서,
-  누군가 실제로 반응을 눌렀으면 그 메시지를 "✅ 확정: {선택} ({누른 사람})"으로 수정하고
+  누군가 실제로 반응을 눌렀으면 그 메시지를 "{카테고리}: {선택}"으로 수정하고
   반응(이모지)을 전부 지운다.
 - GitHub Actions 크론으로 몇 분 간격 반복 실행되는 방식(상시 서버 아님) — 그래서
   클릭이 반영되기까지 최대 폴링 간격만큼 지연이 있을 수 있다.
@@ -24,9 +24,13 @@ from discord_common import (
 
 HEADERS = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
 
+# footer 텍스트 -> (카테고리명, 옵션A 라벨, 옵션B 라벨)
 PENDING_FOOTERS = {
-    f"{REACTION_A} {label_a}    {REACTION_B} {label_b}": (label_a, label_b)
-    for label_a, label_b in (THUMBNAILER_OPTIONS, CREATOR_OPTIONS)
+    f"{REACTION_A} {label_a}    {REACTION_B} {label_b}": (category, label_a, label_b)
+    for category, (label_a, label_b) in (
+        ("썸네일러", THUMBNAILER_OPTIONS),
+        ("제작자", CREATOR_OPTIONS),
+    )
 }
 
 
@@ -59,28 +63,23 @@ def fetch_reaction_users(message_id, emoji):
     return r.json()
 
 
-def display_name(user):
-    return user.get("global_name") or user.get("username") or "알 수 없음"
-
-
 def find_decision(message, bot_user_id):
-    """이 메시지의 🅰️/🅱️ 반응 중 봇이 아닌 사람이 누른 게 있으면 (선택라벨, 누른사람) 반환."""
+    """이 메시지의 🅰️/🅱️ 반응 중 봇이 아닌 사람이 누른 게 있으면 label_index(0 또는 1) 반환."""
     reactions = {r["emoji"]["name"]: r["count"] for r in message.get("reactions", [])}
     for emoji, label_index in ((REACTION_A, 0), (REACTION_B, 1)):
         if reactions.get(emoji, 0) < 2:  # 봇 자신의 반응(count=1)만 있으면 아직 미확정
             continue
         users = fetch_reaction_users(message["id"], emoji)
-        for user in users:
-            if user["id"] != bot_user_id:
-                return label_index, display_name(user)
+        if any(user["id"] != bot_user_id for user in users):
+            return label_index
     return None
 
 
-def confirm_message(message, label_index, chooser_name):
+def confirm_message(message, label_index):
     embed = message["embeds"][0]
-    label_a, label_b = PENDING_FOOTERS[embed["footer"]["text"]]
+    category, label_a, label_b = PENDING_FOOTERS[embed["footer"]["text"]]
     chosen_label = label_a if label_index == 0 else label_b
-    embed["footer"] = {"text": f"✅ 확정: {chosen_label} ({chooser_name})"}
+    embed["footer"] = {"text": f"{category}: {chosen_label}"}
 
     r = requests.patch(
         f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{message['id']}",
@@ -115,13 +114,12 @@ def main():
     for message in messages:
         if not is_pending(message, bot_user_id):
             continue
-        decision = find_decision(message, bot_user_id)
-        if decision is None:
+        label_index = find_decision(message, bot_user_id)
+        if label_index is None:
             continue
-        label_index, chooser_name = decision
-        confirm_message(message, label_index, chooser_name)
+        confirm_message(message, label_index)
         confirmed += 1
-        print(f"[확정] {message['embeds'][0].get('title', message['id'])} -> {chooser_name}")
+        print(f"[확정] {message['embeds'][0].get('title', message['id'])}")
 
     if confirmed == 0:
         print("확정할 반응 없음")
