@@ -22,15 +22,22 @@ from urllib.parse import quote
 
 import requests
 
+from discord_common import (
+    CREATOR_OPTIONS,
+    DISCORD_API_BASE,
+    DISCORD_BOT_TOKEN,
+    DISCORD_CHANNEL_ID,
+    REACTION_A,
+    REACTION_B,
+    THUMBNAILER_OPTIONS,
+)
+
 KST = timezone(timedelta(hours=9))
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
-DISCORD_API_BASE = "https://discord.com/api/v10"
 MARKDOWN_ESCAPE_PATTERN = re.compile(r"([\\`*_~|>\[\]])")
 
 YOUTUBE_API_KEY = os.environ["YOUTUBE_API_KEY"]
 DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
-DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
-DISCORD_CHANNEL_ID = os.environ["DISCORD_CHANNEL_ID"]
 
 MAIN_CHANNEL_ID = os.environ.get("MAIN_CHANNEL_ID", "UCTifMx1ONpElK5x6B4ng8eg")
 SUB_CHANNEL_ID = os.environ.get("SUB_CHANNEL_ID", "UCgGvSg2lscdNUx9ZJIBh9FQ")
@@ -52,13 +59,6 @@ SUB_LONG_PLAYLIST_ID = os.environ.get(
 COLOR_MAIN = 0x57F287
 COLOR_SUB = 0xEB459E
 COLOR_TOTAL = 0xF1C40F
-
-REACTION_A = "🅰️"
-REACTION_B = "🅱️"
-
-# (옵션 A 라벨, 옵션 B 라벨)
-THUMBNAILER_OPTIONS = ("카페인", "멜로크론")
-CREATOR_OPTIONS = ("박정현", "상상")
 
 
 def fetch_channel_info(channel_id):
@@ -229,20 +229,27 @@ def classify_sub(videos, shorts_ids, clip_ids, long_ids):
     return long_videos, clip_videos, shorts_videos
 
 
-def build_channel_header_embed(channel, title, color, date_range):
+def build_empty_channel_embed(channel, title, color, date_range):
+    """그 주에 영상이 하나도 없을 때만 쓰는 최소 안내 메시지."""
     return {
         "author": {"name": channel["title"], "icon_url": channel["thumbnail_url"]},
         "title": title,
-        "description": date_range,
+        "description": f"{date_range}\n＿ 이번 주 업로드 없음",
         "color": color,
     }
 
 
-def build_list_embed(title, color, videos):
+def build_sub_lists_embed(channel, sub_clip, sub_long, date_range):
+    """봉풀주 짧클립/풀영상을 헤더+목록 전부 한 메시지로 합친다."""
     return {
-        "title": f"{title}  ({len(videos)})",
-        "color": color,
-        "description": build_video_lines(videos),
+        "author": {"name": channel["title"], "icon_url": channel["thumbnail_url"]},
+        "title": "「 🎮 봉풀주 업로드 」",
+        "description": date_range,
+        "color": COLOR_SUB,
+        "fields": [
+            {"name": f"✂️ 짧클립  ({len(sub_clip)})", "value": build_video_lines(sub_clip)},
+            {"name": f"🎬 풀영상  ({len(sub_long)})", "value": build_video_lines(sub_long)},
+        ],
     }
 
 
@@ -262,9 +269,10 @@ def build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts):
     }
 
 
-def build_video_reaction_embed(video, color, option_labels, show_thumbnail):
+def build_video_reaction_embed(channel, video, color, option_labels, show_thumbnail):
     label_a, label_b = option_labels
     embed = {
+        "author": {"name": channel["title"], "icon_url": channel["thumbnail_url"]},
         "title": video["snippet"]["title"],
         "url": video_url(video),
         "description": f"`{format_kst_date(video['snippet']['publishedAt'])}`",
@@ -316,9 +324,9 @@ def add_reaction(message_id, emoji):
     r.raise_for_status()
 
 
-def post_videos_with_reactions(videos, color, option_labels, show_thumbnail):
+def post_videos_with_reactions(channel, videos, color, option_labels, show_thumbnail):
     for v in sorted(videos, key=lambda x: x["snippet"]["publishedAt"]):
-        embed = build_video_reaction_embed(v, color, option_labels, show_thumbnail)
+        embed = build_video_reaction_embed(channel, v, color, option_labels, show_thumbnail)
         message = send_message_as_bot(embed)
         add_reaction(message["id"], REACTION_A)
         add_reaction(message["id"], REACTION_B)
@@ -359,20 +367,24 @@ def main():
     # 1) 큰 주간 헤더
     send_header_to_discord(week_str)
 
-    # 2) 본채널
-    send_embed_to_discord(
-        build_channel_header_embed(main_channel, "「 👤 본채널 업로드 」", COLOR_MAIN, date_range)
-    )
-    post_videos_with_reactions(main_long, COLOR_MAIN, THUMBNAILER_OPTIONS, show_thumbnail=True)
-    post_videos_with_reactions(main_shorts, COLOR_MAIN, CREATOR_OPTIONS, show_thumbnail=False)
+    # 2) 본채널 — 영상마다 메시지 1개(반응용). 아무것도 없으면 안내 메시지 1개만.
+    if main_long or main_shorts:
+        post_videos_with_reactions(
+            main_channel, main_long, COLOR_MAIN, THUMBNAILER_OPTIONS, show_thumbnail=True
+        )
+        post_videos_with_reactions(
+            main_channel, main_shorts, COLOR_MAIN, CREATOR_OPTIONS, show_thumbnail=False
+        )
+    else:
+        send_embed_to_discord(
+            build_empty_channel_embed(main_channel, "「 👤 본채널 업로드 」", COLOR_MAIN, date_range)
+        )
 
-    # 3) 봉풀주
-    send_embed_to_discord(
-        build_channel_header_embed(sub_channel, "「 🎮 봉풀주 업로드 」", COLOR_SUB, date_range)
+    # 3) 봉풀주 — 짧클립/풀영상은 한 메시지로 합치고, 쇼츠만 영상별 메시지(반응용).
+    send_embed_to_discord(build_sub_lists_embed(sub_channel, sub_clip, sub_long, date_range))
+    post_videos_with_reactions(
+        sub_channel, sub_shorts, COLOR_SUB, CREATOR_OPTIONS, show_thumbnail=False
     )
-    send_embed_to_discord(build_list_embed("✂️ 짧클립", COLOR_SUB, sub_clip))
-    send_embed_to_discord(build_list_embed("🎬 풀영상", COLOR_SUB, sub_long))
-    post_videos_with_reactions(sub_shorts, COLOR_SUB, CREATOR_OPTIONS, show_thumbnail=False)
 
     # 4) Total
     send_embed_to_discord(build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts))
