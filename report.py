@@ -1,8 +1,11 @@
 """
 유튜브 주간 업로드 보고 봇
 - 본채널 + 봉풀주(서브채널)의 지난 1주일(직전 일요일 0시 ~ 이번 일요일 0시, KST) 업로드를
-  롱폼(풀영상)/쇼츠로 나눠 디스코드 채널에 보고 메시지로 올린다.
-- 쇼츠 판정: 각 채널의 "쇼츠 재생목록"에 들어있는 영상이면 쇼츠, 아니면 롱폼(풀영상).
+  정리해서 디스코드 채널에 [본채널] [봉풀주] [Total] 3개 메시지로 나눠 올린다.
+- 분류 기준: 각 채널/카테고리별로 지정된 "재생목록"에 들어있는지로 판정한다.
+    - 본채널: 쇼츠 재생목록에 있으면 쇼츠, 없으면 롱폼
+    - 봉풀주: 쇼츠 재생목록 > 짧클립 재생목록 > 풀영상 재생목록 순으로 확인
+      (어디에도 없으면 풀영상으로 취급)
 - GitHub Actions 크론으로 매주 일요일 0시(KST)에 1회 실행되고 끝난다(상시 서버 불필요).
 """
 
@@ -24,26 +27,42 @@ DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 MAIN_CHANNEL_ID = os.environ.get("MAIN_CHANNEL_ID", "UCTifMx1ONpElK5x6B4ng8eg")
 SUB_CHANNEL_ID = os.environ.get("SUB_CHANNEL_ID", "UCgGvSg2lscdNUx9ZJIBh9FQ")
 
-# 이 재생목록에 들어있는 영상은 쇼츠로 분류한다.
+# 분류용 재생목록 ID
 MAIN_SHORTS_PLAYLIST_ID = os.environ.get(
     "MAIN_SHORTS_PLAYLIST_ID", "PLqE7uvTHaH30qYSSVmxsjV6JrlUUInv_f"
 )
 SUB_SHORTS_PLAYLIST_ID = os.environ.get(
     "SUB_SHORTS_PLAYLIST_ID", "PLQCedlY19W03Zpo5l4MYInmwqiqJQnO75"
 )
+SUB_CLIP_PLAYLIST_ID = os.environ.get(
+    "SUB_CLIP_PLAYLIST_ID", "PLQCedlY19W00gv3uJ7OP_kqYQ-l2kFjQE"
+)
+SUB_LONG_PLAYLIST_ID = os.environ.get(
+    "SUB_LONG_PLAYLIST_ID", "PLQCedlY19W03t8VSqAeRTleKHzXfSZpB7"
+)
+
+COLOR_MAIN = 0x57F287
+COLOR_SUB = 0xEB459E
+COLOR_TOTAL = 0xF1C40F
 
 
-def get_uploads_playlist_id(channel_id):
+def fetch_channel_info(channel_id):
+    """업로드 재생목록 ID + 채널명 + 프로필 사진 URL을 한 번에 가져온다."""
     r = requests.get(
         f"{API_BASE}/channels",
-        params={"part": "contentDetails", "id": channel_id, "key": YOUTUBE_API_KEY},
+        params={"part": "snippet,contentDetails", "id": channel_id, "key": YOUTUBE_API_KEY},
         timeout=30,
     )
     r.raise_for_status()
     items = r.json().get("items", [])
     if not items:
         raise RuntimeError(f"채널을 찾을 수 없습니다: {channel_id}")
-    return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    item = items[0]
+    return {
+        "uploads_playlist_id": item["contentDetails"]["relatedPlaylists"]["uploads"],
+        "title": item["snippet"]["title"],
+        "thumbnail_url": item["snippet"]["thumbnails"]["default"]["url"],
+    }
 
 
 def fetch_recent_video_ids(playlist_id, start_utc, end_utc, max_pages=20):
@@ -85,7 +104,7 @@ def fetch_recent_video_ids(playlist_id, start_utc, end_utc, max_pages=20):
 
 
 def fetch_playlist_video_ids(playlist_id, max_pages=200):
-    """재생목록에 들어있는 전체 영상 ID 집합(쇼츠 판정용, 추가된 순서 무관하게 끝까지 조회)."""
+    """재생목록에 들어있는 전체 영상 ID 집합(분류용, 추가된 순서 무관하게 끝까지 조회)."""
     video_ids = set()
     page_token = None
     for _ in range(max_pages):
@@ -164,49 +183,78 @@ def week_label(this_sunday_kst):
     return f"{start.month}월 {week_of_month}주"
 
 
-def split_long_shorts(videos, shorts_ids):
+def week_date_range_label(this_sunday_kst):
+    start = this_sunday_kst - timedelta(days=7)
+    end = this_sunday_kst - timedelta(days=1)
+    return f"{start.month}/{start.day} ~ {end.month}/{end.day}"
+
+
+def classify_main(videos, shorts_ids):
     long_videos = [v for v in videos if v["id"] not in shorts_ids]
     shorts_videos = [v for v in videos if v["id"] in shorts_ids]
     return long_videos, shorts_videos
 
 
-def build_report(main_long, main_shorts, sub_long, sub_shorts, week_str):
-    embed = {
-        "title": f"📅  {week_str} 주간 보고",
-        "color": 0x5865F2,
+def classify_sub(videos, shorts_ids, clip_ids, long_ids):
+    shorts_videos, clip_videos, long_videos = [], [], []
+    for v in videos:
+        vid = v["id"]
+        if vid in shorts_ids:
+            shorts_videos.append(v)
+        elif vid in clip_ids:
+            clip_videos.append(v)
+        else:
+            # long_ids에 없어도(아직 재생목록 정리 전이어도) 기본은 풀영상으로 취급
+            long_videos.append(v)
+    return long_videos, clip_videos, shorts_videos
+
+
+def build_main_embed(main_channel, main_long, main_shorts, week_str, date_range):
+    return {
+        "author": {"name": main_channel["title"], "icon_url": main_channel["thumbnail_url"]},
+        "title": "「 👤 본채널 업로드 」",
+        "description": f"**{week_str}**  ·  {date_range}",
+        "color": COLOR_MAIN,
         "fields": [
-            {
-                "name": f"👤  본채널 · 롱폼  ({len(main_long)})",
-                "value": build_video_lines(main_long),
-            },
-            {
-                "name": f"👤  본채널 · 쇼츠  ({len(main_shorts)})",
-                "value": build_video_lines(main_shorts),
-            },
-            {
-                "name": f"🎮  봉풀주 · 풀영상  ({len(sub_long)})",
-                "value": build_video_lines(sub_long),
-            },
-            {
-                "name": f"🎮  봉풀주 · 쇼츠  ({len(sub_shorts)})",
-                "value": build_video_lines(sub_shorts),
-            },
-            {
-                "name": "📊  Total",
-                "value": (
-                    f"본채널  롱폼 **{len(main_long)}**개 · 쇼츠 **{len(main_shorts)}**개\n"
-                    f"봉풀주  풀영상 **{len(sub_long)}**개 · 쇼츠 **{len(sub_shorts)}**개"
-                ),
-            },
+            {"name": f"🎬 롱폼  ({len(main_long)})", "value": build_video_lines(main_long)},
+            {"name": f"⚡ 쇼츠  ({len(main_shorts)})", "value": build_video_lines(main_shorts)},
         ],
-        "footer": {"text": "메모 / 썸네일러 이름은 이 메시지 우클릭 → 스레드 만들기로 남겨주세요"},
     }
-    return embed
 
 
-def send_to_discord(embed):
+def build_sub_embed(sub_channel, sub_long, sub_clip, sub_shorts, week_str, date_range):
+    return {
+        "author": {"name": sub_channel["title"], "icon_url": sub_channel["thumbnail_url"]},
+        "title": "「 🎮 봉풀주 업로드 」",
+        "description": f"**{week_str}**  ·  {date_range}",
+        "color": COLOR_SUB,
+        "fields": [
+            {"name": f"✂️ 짧클립  ({len(sub_clip)})", "value": build_video_lines(sub_clip)},
+            {"name": f"🎬 풀영상  ({len(sub_long)})", "value": build_video_lines(sub_long)},
+            {"name": f"⚡ 쇼츠  ({len(sub_shorts)})", "value": build_video_lines(sub_shorts)},
+        ],
+    }
+
+
+def build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts, week_str):
+    return {
+        "title": "「 📊 Total 」",
+        "description": f"**{week_str}** 총 업로드 요약",
+        "color": COLOR_TOTAL,
+        "fields": [
+            {"name": "👤 본채널 롱폼", "value": f"**{len(main_long)}**개", "inline": True},
+            {"name": "👤 본채널 쇼츠", "value": f"**{len(main_shorts)}**개", "inline": True},
+            {"name": "​", "value": "​", "inline": True},
+            {"name": "🎮 봉풀주 풀영상", "value": f"**{len(sub_long)}**개", "inline": True},
+            {"name": "🎮 봉풀주 짧클립", "value": f"**{len(sub_clip)}**개", "inline": True},
+            {"name": "🎮 봉풀주 쇼츠", "value": f"**{len(sub_shorts)}**개", "inline": True},
+        ],
+        "footer": {"text": "메모 / 썸네일러 이름은 각 메시지 우클릭 → 스레드 만들기로 남겨주세요"},
+    }
+
+
+def send_embed_to_discord(embed):
     # thread_name은 포럼 채널 웹훅에서만 동작해서(일반 채널은 400 에러) 쓰지 않음.
-    # 메모/썸네일러 이름을 남기고 싶으면 이 메시지를 우클릭 -> "스레드 만들기"로 직접 시작하면 됨.
     payload = {"embeds": [embed]}
     r = requests.post(DISCORD_WEBHOOK_URL, params={"wait": "true"}, json=payload, timeout=30)
     r.raise_for_status()
@@ -216,25 +264,44 @@ def send_to_discord(embed):
 def main():
     start_utc, end_utc, this_sunday_kst = get_week_range()
     week_str = week_label(this_sunday_kst)
+    date_range = week_date_range_label(this_sunday_kst)
 
-    main_playlist = get_uploads_playlist_id(MAIN_CHANNEL_ID)
-    sub_playlist = get_uploads_playlist_id(SUB_CHANNEL_ID)
+    main_channel = fetch_channel_info(MAIN_CHANNEL_ID)
+    sub_channel = fetch_channel_info(SUB_CHANNEL_ID)
 
-    main_ids = fetch_recent_video_ids(main_playlist, start_utc, end_utc)
-    sub_ids = fetch_recent_video_ids(sub_playlist, start_utc, end_utc)
+    main_ids = fetch_recent_video_ids(main_channel["uploads_playlist_id"], start_utc, end_utc)
+    sub_ids = fetch_recent_video_ids(sub_channel["uploads_playlist_id"], start_utc, end_utc)
 
     main_videos = fetch_video_details(main_ids)
     sub_videos = fetch_video_details(sub_ids)
 
     main_shorts_ids = fetch_playlist_video_ids(MAIN_SHORTS_PLAYLIST_ID)
     sub_shorts_ids = fetch_playlist_video_ids(SUB_SHORTS_PLAYLIST_ID)
+    sub_clip_ids = fetch_playlist_video_ids(SUB_CLIP_PLAYLIST_ID)
+    sub_long_ids = fetch_playlist_video_ids(SUB_LONG_PLAYLIST_ID)
 
-    main_long, main_shorts = split_long_shorts(main_videos, main_shorts_ids)
-    sub_long, sub_shorts = split_long_shorts(sub_videos, sub_shorts_ids)
+    main_long, main_shorts = classify_main(main_videos, main_shorts_ids)
+    sub_long, sub_clip, sub_shorts = classify_sub(
+        sub_videos, sub_shorts_ids, sub_clip_ids, sub_long_ids
+    )
 
-    embed = build_report(main_long, main_shorts, sub_long, sub_shorts, week_str)
-    result = send_to_discord(embed)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    results = []
+    results.append(
+        send_embed_to_discord(
+            build_main_embed(main_channel, main_long, main_shorts, week_str, date_range)
+        )
+    )
+    results.append(
+        send_embed_to_discord(
+            build_sub_embed(sub_channel, sub_long, sub_clip, sub_shorts, week_str, date_range)
+        )
+    )
+    results.append(
+        send_embed_to_discord(
+            build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts, week_str)
+        )
+    )
+    print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
