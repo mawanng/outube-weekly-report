@@ -30,8 +30,7 @@ from discord_common import (
     DISCORD_API_BASE,
     DISCORD_BOT_TOKEN,
     DISCORD_CHANNEL_ID,
-    REACTION_A,
-    REACTION_B,
+    REACTION_EMOJIS,
     THUMBNAILER_OPTIONS,
 )
 
@@ -290,14 +289,16 @@ def build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts):
 
 
 def build_video_reaction_embed(channel, video, color, option_labels, show_thumbnail):
-    label_a, label_b = option_labels
+    footer_text = "    ".join(
+        f"{emoji} {label}" for emoji, label in zip(REACTION_EMOJIS, option_labels)
+    )
     embed = {
         "author": {"name": channel["title"], "icon_url": channel["thumbnail_url"]},
         "title": video["snippet"]["title"],
         "url": video_url(video),
         "description": f"`{format_kst_date(video['snippet']['publishedAt'])}`",
         "color": color,
-        "footer": {"text": f"{REACTION_A} {label_a}    {REACTION_B} {label_b}"},
+        "footer": {"text": footer_text},
     }
     if show_thumbnail:
         thumbnails = video["snippet"].get("thumbnails", {})
@@ -360,14 +361,13 @@ def post_videos_with_reactions(
     for v in sorted(videos, key=lambda x: x["snippet"]["publishedAt"]):
         embed = build_video_reaction_embed(channel, v, color, option_labels, show_thumbnail)
         message = send_message_as_bot(embed)
-        add_reaction(message["id"], REACTION_A)
-        add_reaction(message["id"], REACTION_B)
+        for emoji in REACTION_EMOJIS[: len(option_labels)]:
+            add_reaction(message["id"], emoji)
         pending[message["id"]] = {
             "summary_message_id": summary_message_id,
             "video_id": v["id"],
             "category": category,
-            "label_a": option_labels[0],
-            "label_b": option_labels[1],
+            "labels": list(option_labels),
         }
 
 

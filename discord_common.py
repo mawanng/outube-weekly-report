@@ -7,9 +7,9 @@ DISCORD_API_BASE = "https://discord.com/api/v10"
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_CHANNEL_ID = os.environ["DISCORD_CHANNEL_ID"]
 
-REACTION_A = "🅰️"
-REACTION_B = "🅱️"
+# 선택지 순서대로 매칭되는 반응 이모지. 3번째부터는 알파벳 대신 숫자 이모지를 이어 씀
+# (🅰️/🅱️ 다음 "C" 문자 이모지는 유니코드에 없음).
+REACTION_EMOJIS = ["🅰️", "🅱️", "3️⃣", "4️⃣", "5️⃣"]
 
-# (옵션 A 라벨, 옵션 B 라벨)
 THUMBNAILER_OPTIONS = ("카페인", "멜로크론")
-CREATOR_OPTIONS = ("박정현", "상상")
+CREATOR_OPTIONS = ("박정현", "상상", "쇼츠팀")

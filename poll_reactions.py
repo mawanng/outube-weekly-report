@@ -1,7 +1,7 @@
 """
 반응 확정 처리 봇
 - report.py가 pending_reactions.json에 적어둔 "선택용 카드 -> 정리본 메시지" 매핑을 보고,
-  누군가 실제로 🅰️/🅱️ 반응을 눌렀으면:
+  누군가 실제로 선택지 이모지(🅰️/🅱️/3️⃣ ...) 반응을 눌렀으면:
     1) 정리본 메시지에서 그 영상 줄의 "(카테고리: )" 자리표시를 "(카테고리: 선택값)"으로 채우고
     2) 선택용 카드 메시지는 삭제하고
     3) pending_reactions.json에서 그 항목을 지운다.
@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 import requests
 
-from discord_common import DISCORD_API_BASE, DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, REACTION_A, REACTION_B
+from discord_common import DISCORD_API_BASE, DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, REACTION_EMOJIS
 
 PENDING_FILE = "pending_reactions.json"
 
@@ -72,10 +72,10 @@ def fetch_reaction_users(message_id, emoji):
     return r.json() if r else []
 
 
-def find_decision(message, bot_user_id):
-    """이 메시지의 🅰️/🅱️ 반응 중 봇이 아닌 사람이 누른 게 있으면 label_index(0 또는 1) 반환."""
+def find_decision(message, bot_user_id, num_options):
+    """이 메시지의 선택지 반응 중 봇이 아닌 사람이 누른 게 있으면 label_index 반환."""
     reactions = {r["emoji"]["name"]: r["count"] for r in message.get("reactions", [])}
-    for emoji, label_index in ((REACTION_A, 0), (REACTION_B, 1)):
+    for label_index, emoji in enumerate(REACTION_EMOJIS[:num_options]):
         if reactions.get(emoji, 0) < 2:  # 봇 자신의 반응(count=1)만 있으면 아직 미확정
             continue
         users = fetch_reaction_users(message["id"], emoji)
@@ -134,11 +134,11 @@ def main():
             confirmed_ids.append(card_message_id)
             continue
 
-        label_index = find_decision(message, bot_user_id)
+        label_index = find_decision(message, bot_user_id, len(entry["labels"]))
         if label_index is None:
             continue
 
-        chosen_label = entry["label_a"] if label_index == 0 else entry["label_b"]
+        chosen_label = entry["labels"][label_index]
         filled = fill_in_summary(
             entry["summary_message_id"], entry["video_id"], entry["category"], chosen_label
         )
