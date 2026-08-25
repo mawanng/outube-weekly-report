@@ -11,6 +11,9 @@ on:
         required: false
         default: ""
 
+permissions:
+  contents: write  # pending_reactions.json을 커밋하기 위해 필요
+
 jobs:
   report:
     runs-on: ubuntu-latest
@@ -35,3 +38,13 @@ jobs:
           # MAIN_CHANNEL_ID: "UCxxxxxxxxxxxxxxxxxxxxxx"
           # SUB_CHANNEL_ID: "UCxxxxxxxxxxxxxxxxxxxxxx"
         run: python report.py
+
+      - name: pending_reactions.json 커밋
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pending_reactions.json
+          git diff --cached --quiet && exit 0
+          git pull --rebase
+          git commit -m "pending_reactions.json 갱신"
+          git push

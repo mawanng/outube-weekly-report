@@ -5,6 +5,9 @@ on:
     - cron: "*/5 * * * *"  # 5분마다 실행 (Public 저장소라 Actions 분수 무제한)
   workflow_dispatch: {}
 
+permissions:
+  contents: write  # pending_reactions.json을 커밋하기 위해 필요
+
 jobs:
   poll:
     runs-on: ubuntu-latest
@@ -22,3 +25,13 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
         run: python poll_reactions.py
+
+      - name: pending_reactions.json 커밋
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pending_reactions.json
+          git diff --cached --quiet && exit 0
+          git pull --rebase
+          git commit -m "pending_reactions.json 갱신"
+          git push

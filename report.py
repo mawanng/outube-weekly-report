@@ -6,9 +6,11 @@
     - 본채널: 쇼츠 재생목록에 있으면 쇼츠, 없으면 롱폼
     - 봉풀주: 쇼츠 재생목록 > 짧클립 재생목록 > 풀영상 재생목록 순으로 확인
       (셋 다 아니면 집계에서 제외 — 재생목록 정리를 안 한 영상은 보고서에 안 뜸)
-- 본채널 롱폼 / 본채널·봉풀주 쇼츠는 영상 1개당 메시지 1개로 올리고, 봇이 그 메시지에
-  선택지 이모지 반응(🅰️/🅱️)을 미리 달아둔다 — 사람이 그 이모지를 눌러 담당자를 표시하는 방식.
-  (이 반응은 웹훅 권한으로는 못 달아서, 이 부분만 디스코드 봇 토큰으로 전송한다.)
+- 채널별 "정리본" 카드(목록 + 담당자 자리표시)를 먼저 올리고, 그 아래 본채널 롱폼 /
+  본채널·봉풀주 쇼츠는 영상 1개당 선택용 카드 1개씩 추가로 올린다. 봇이 그 카드에
+  선택지 이모지 반응(🅰️/🅱️)을 미리 달아둔다 — 사람이 그 이모지를 누르면(poll_reactions.py가
+  감지) 정리본의 자리표시를 채우고 선택용 카드는 삭제한다. 매핑 정보는 pending_reactions.json에
+  기록해 커밋해둔다(다음 폴링 실행이 이어받아야 하므로).
 - GitHub Actions 크론으로 매주 일요일 0시(KST)에 1회 실행되고 끝난다(상시 서버 불필요).
 - 테스트용: REPORT_TEST_DATE 환경변수(YYYY-MM-DD)를 주면 그 날짜가 속한 주를 기준으로 계산한다.
 """
@@ -230,19 +232,34 @@ def classify_sub(videos, shorts_ids, clip_ids, long_ids):
     return long_videos, clip_videos, shorts_videos
 
 
-def build_channel_header_embed(channel, title, color, date_range, has_uploads):
-    """채널 카드(헤더). 업로드가 없으면 안내 문구도 같이 넣는다."""
-    description = date_range if has_uploads else f"{date_range}\n＿ 이번 주 업로드 없음"
+def build_pending_lines(videos, category):
+    """영상 목록 + 아직 안 정해진 담당자 자리표시(예: '(썸네일러: )')를 같이 넣는다."""
+    if not videos:
+        return "＿ 없음"
+    lines = []
+    for v in sorted(videos, key=lambda x: x["snippet"]["publishedAt"]):
+        title = escape_markdown(v["snippet"]["title"])
+        date = format_kst_date(v["snippet"]["publishedAt"])
+        lines.append(f"› [{title}]({video_url(v)})  `{date}`  ({category}: )")
+    return "\n".join(lines)
+
+
+def build_main_summary_embed(channel, main_long, main_shorts, date_range):
+    """본채널 카드(헤더+롱폼/쇼츠 목록, 담당자 자리표시 포함)."""
     return {
         "author": {"name": channel["title"], "icon_url": channel["thumbnail_url"]},
-        "title": title,
-        "description": description,
-        "color": color,
+        "title": "「 👤 본채널 업로드 」",
+        "description": date_range,
+        "color": COLOR_MAIN,
+        "fields": [
+            {"name": f"🎬 롱폼  ({len(main_long)})", "value": build_pending_lines(main_long, "썸네일러")},
+            {"name": f"⚡ 쇼츠  ({len(main_shorts)})", "value": build_pending_lines(main_shorts, "제작자")},
+        ],
     }
 
 
-def build_sub_lists_embed(channel, sub_clip, sub_long, date_range):
-    """봉풀주 짧클립/풀영상을 헤더+목록 전부 한 메시지로 합친다."""
+def build_sub_summary_embed(channel, sub_clip, sub_long, sub_shorts, date_range):
+    """봉풀주 카드(헤더+짧클립/풀영상/쇼츠 목록, 쇼츠만 담당자 자리표시 포함)."""
     return {
         "author": {"name": channel["title"], "icon_url": channel["thumbnail_url"]},
         "title": "「 🎮 봉풀주 업로드 」",
@@ -251,6 +268,7 @@ def build_sub_lists_embed(channel, sub_clip, sub_long, date_range):
         "fields": [
             {"name": f"✂️ 짧클립  ({len(sub_clip)})", "value": build_video_lines(sub_clip)},
             {"name": f"🎬 풀영상  ({len(sub_long)})", "value": build_video_lines(sub_long)},
+            {"name": f"⚡ 쇼츠  ({len(sub_shorts)})", "value": build_pending_lines(sub_shorts, "제작자")},
         ],
     }
 
@@ -336,12 +354,37 @@ def add_reaction(message_id, emoji):
     time.sleep(0.35)  # 반응 추가 API의 촘촘한 rate limit(초당 몇 회)을 미리 피함
 
 
-def post_videos_with_reactions(channel, videos, color, option_labels, show_thumbnail):
+def post_videos_with_reactions(
+    channel, videos, color, category, option_labels, show_thumbnail, summary_message_id, pending
+):
     for v in sorted(videos, key=lambda x: x["snippet"]["publishedAt"]):
         embed = build_video_reaction_embed(channel, v, color, option_labels, show_thumbnail)
         message = send_message_as_bot(embed)
         add_reaction(message["id"], REACTION_A)
         add_reaction(message["id"], REACTION_B)
+        pending[message["id"]] = {
+            "summary_message_id": summary_message_id,
+            "video_id": v["id"],
+            "category": category,
+            "label_a": option_labels[0],
+            "label_b": option_labels[1],
+        }
+
+
+PENDING_FILE = "pending_reactions.json"
+
+
+def load_pending():
+    try:
+        with open(PENDING_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def save_pending(pending):
+    with open(PENDING_FILE, "w", encoding="utf-8") as f:
+        json.dump(pending, f, ensure_ascii=False, indent=2)
 
 
 def resolve_now():
@@ -376,31 +419,52 @@ def main():
         sub_videos, sub_shorts_ids, sub_clip_ids, sub_long_ids
     )
 
+    pending = load_pending()
+
     # 1) 큰 주간 헤더
     send_header_to_discord(week_str)
 
-    # 2) 본채널 — 채널 카드 하나 + 영상마다 메시지 1개(반응용).
-    send_embed_to_discord(
-        build_channel_header_embed(
-            main_channel,
-            "「 👤 본채널 업로드 」",
-            COLOR_MAIN,
-            date_range,
-            has_uploads=bool(main_long or main_shorts),
-        )
+    # 2) 본채널 — 정리본 카드(자리표시 포함) 먼저, 그 아래 영상마다 선택용 카드.
+    main_summary = send_message_as_bot(
+        build_main_summary_embed(main_channel, main_long, main_shorts, date_range)
     )
     post_videos_with_reactions(
-        main_channel, main_long, COLOR_MAIN, THUMBNAILER_OPTIONS, show_thumbnail=True
+        main_channel,
+        main_long,
+        COLOR_MAIN,
+        "썸네일러",
+        THUMBNAILER_OPTIONS,
+        show_thumbnail=True,
+        summary_message_id=main_summary["id"],
+        pending=pending,
     )
     post_videos_with_reactions(
-        main_channel, main_shorts, COLOR_MAIN, CREATOR_OPTIONS, show_thumbnail=False
+        main_channel,
+        main_shorts,
+        COLOR_MAIN,
+        "제작자",
+        CREATOR_OPTIONS,
+        show_thumbnail=False,
+        summary_message_id=main_summary["id"],
+        pending=pending,
     )
 
-    # 3) 봉풀주 — 짧클립/풀영상은 한 메시지로 합치고, 쇼츠만 영상별 메시지(반응용).
-    send_embed_to_discord(build_sub_lists_embed(sub_channel, sub_clip, sub_long, date_range))
-    post_videos_with_reactions(
-        sub_channel, sub_shorts, COLOR_SUB, CREATOR_OPTIONS, show_thumbnail=False
+    # 3) 봉풀주 — 정리본 카드(짧클립/풀영상/쇼츠, 쇼츠만 자리표시) + 쇼츠만 선택용 카드.
+    sub_summary = send_message_as_bot(
+        build_sub_summary_embed(sub_channel, sub_clip, sub_long, sub_shorts, date_range)
     )
+    post_videos_with_reactions(
+        sub_channel,
+        sub_shorts,
+        COLOR_SUB,
+        "제작자",
+        CREATOR_OPTIONS,
+        show_thumbnail=False,
+        summary_message_id=sub_summary["id"],
+        pending=pending,
+    )
+
+    save_pending(pending)
 
     # 4) Total
     send_embed_to_discord(build_total_embed(main_long, main_shorts, sub_long, sub_clip, sub_shorts))

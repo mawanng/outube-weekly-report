@@ -1,66 +1,75 @@
 """
 반응 확정 처리 봇
-- report.py가 올린 영상별 메시지(🅰️/🅱️ 반응이 달린 것)를 주기적으로 훑어서,
-  누군가 실제로 반응을 눌렀으면 그 메시지를 "{카테고리}: {선택}"으로 수정하고
-  반응(이모지)을 전부 지운다.
+- report.py가 pending_reactions.json에 적어둔 "선택용 카드 -> 정리본 메시지" 매핑을 보고,
+  누군가 실제로 🅰️/🅱️ 반응을 눌렀으면:
+    1) 정리본 메시지에서 그 영상 줄의 "(카테고리: )" 자리표시를 "(카테고리: 선택값)"으로 채우고
+    2) 선택용 카드 메시지는 삭제하고
+    3) pending_reactions.json에서 그 항목을 지운다.
 - GitHub Actions 크론으로 몇 분 간격 반복 실행되는 방식(상시 서버 아님) — 그래서
   클릭이 반영되기까지 최대 폴링 간격만큼 지연이 있을 수 있다.
 """
 
+import json
+import re
 import sys
+import time
 from urllib.parse import quote
 
 import requests
 
-from discord_common import (
-    CREATOR_OPTIONS,
-    DISCORD_API_BASE,
-    DISCORD_BOT_TOKEN,
-    DISCORD_CHANNEL_ID,
-    REACTION_A,
-    REACTION_B,
-    THUMBNAILER_OPTIONS,
-)
+from discord_common import DISCORD_API_BASE, DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, REACTION_A, REACTION_B
 
-HEADERS = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+PENDING_FILE = "pending_reactions.json"
 
-# footer 텍스트 -> (카테고리명, 옵션A 라벨, 옵션B 라벨)
-PENDING_FOOTERS = {
-    f"{REACTION_A} {label_a}    {REACTION_B} {label_b}": (category, label_a, label_b)
-    for category, (label_a, label_b) in (
-        ("썸네일러", THUMBNAILER_OPTIONS),
-        ("제작자", CREATOR_OPTIONS),
-    )
-}
+
+def load_pending():
+    try:
+        with open(PENDING_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def save_pending(pending):
+    with open(PENDING_FILE, "w", encoding="utf-8") as f:
+        json.dump(pending, f, ensure_ascii=False, indent=2)
+
+
+def discord_bot_request(method, url, **kwargs):
+    """디스코드 봇 API 호출 + 429(rate limit)는 retry_after만큼 기다렸다가 자동 재시도."""
+    headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+    while True:
+        r = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+        if r.status_code == 429:
+            retry_after = r.json().get("retry_after", 1)
+            time.sleep(retry_after + 0.1)
+            continue
+        if r.status_code == 404:
+            return None  # 메시지가 이미 지워졌거나 없음
+        r.raise_for_status()
+        return r
 
 
 def get_bot_user_id():
-    r = requests.get(f"{DISCORD_API_BASE}/users/@me", headers=HEADERS, timeout=30)
-    r.raise_for_status()
+    r = discord_bot_request("GET", f"{DISCORD_API_BASE}/users/@me")
     return r.json()["id"]
 
 
-def fetch_recent_messages():
-    r = requests.get(
-        f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages",
-        headers=HEADERS,
-        params={"limit": 100},
-        timeout=30,
+def fetch_message(message_id):
+    r = discord_bot_request(
+        "GET", f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{message_id}"
     )
-    r.raise_for_status()
-    return r.json()
+    return r.json() if r else None
 
 
 def fetch_reaction_users(message_id, emoji):
     encoded = quote(emoji, safe="")
-    r = requests.get(
+    r = discord_bot_request(
+        "GET",
         f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{message_id}/reactions/{encoded}",
-        headers=HEADERS,
         params={"limit": 10},
-        timeout=30,
     )
-    r.raise_for_status()
-    return r.json()
+    return r.json() if r else []
 
 
 def find_decision(message, bot_user_id):
@@ -75,53 +84,80 @@ def find_decision(message, bot_user_id):
     return None
 
 
-def confirm_message(message, label_index):
-    embed = message["embeds"][0]
-    category, label_a, label_b = PENDING_FOOTERS[embed["footer"]["text"]]
-    chosen_label = label_a if label_index == 0 else label_b
-    embed["footer"] = {"text": f"{category}: {chosen_label}"}
-
-    r = requests.patch(
-        f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{message['id']}",
-        headers=HEADERS,
-        json={"embeds": [embed]},
-        timeout=30,
-    )
-    r.raise_for_status()
-
-    r = requests.delete(
-        f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{message['id']}/reactions",
-        headers=HEADERS,
-        timeout=30,
-    )
-    r.raise_for_status()
-
-
-def is_pending(message, bot_user_id):
-    if message.get("author", {}).get("id") != bot_user_id:
+def fill_in_summary(summary_message_id, video_id, category, chosen_label):
+    message = fetch_message(summary_message_id)
+    if message is None:
         return False
-    embeds = message.get("embeds") or []
-    if not embeds or "footer" not in embeds[0]:
+
+    marker = f"/watch?v={video_id})"
+    placeholder_pattern = re.compile(rf"\({re.escape(category)}: [^)]*\)$", re.MULTILINE)
+
+    updated = False
+    for field in message["embeds"][0].get("fields", []):
+        lines = field["value"].split("\n")
+        for i, line in enumerate(lines):
+            if marker in line and placeholder_pattern.search(line):
+                lines[i] = placeholder_pattern.sub(f"({category}: {chosen_label})", line)
+                updated = True
+        field["value"] = "\n".join(lines)
+
+    if not updated:
         return False
-    return embeds[0]["footer"]["text"] in PENDING_FOOTERS
+
+    discord_bot_request(
+        "PATCH",
+        f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{summary_message_id}",
+        json={"embeds": message["embeds"]},
+    )
+    return True
+
+
+def delete_message(message_id):
+    discord_bot_request(
+        "DELETE", f"{DISCORD_API_BASE}/channels/{DISCORD_CHANNEL_ID}/messages/{message_id}"
+    )
 
 
 def main():
-    bot_user_id = get_bot_user_id()
-    messages = fetch_recent_messages()
+    pending = load_pending()
+    if not pending:
+        print("대기 중인 항목 없음")
+        return
 
-    confirmed = 0
-    for message in messages:
-        if not is_pending(message, bot_user_id):
+    bot_user_id = get_bot_user_id()
+    confirmed_ids = []
+
+    for card_message_id, entry in pending.items():
+        message = fetch_message(card_message_id)
+        if message is None:
+            # 카드가 이미 지워졌으면(예: 수동 삭제) 대기 목록에서도 정리
+            confirmed_ids.append(card_message_id)
             continue
+
         label_index = find_decision(message, bot_user_id)
         if label_index is None:
             continue
-        confirm_message(message, label_index)
-        confirmed += 1
-        print(f"[확정] {message['embeds'][0].get('title', message['id'])}")
 
-    if confirmed == 0:
+        chosen_label = entry["label_a"] if label_index == 0 else entry["label_b"]
+        filled = fill_in_summary(
+            entry["summary_message_id"], entry["video_id"], entry["category"], chosen_label
+        )
+        if filled:
+            delete_message(card_message_id)
+            confirmed_ids.append(card_message_id)
+            print(f"[확정] {entry['video_id']} -> {entry['category']}: {chosen_label}")
+        else:
+            print(
+                f"[경고] 정리본에서 {entry['video_id']} 줄을 못 찾음 (summary={entry['summary_message_id']})",
+                file=sys.stderr,
+            )
+
+    for card_message_id in confirmed_ids:
+        pending.pop(card_message_id, None)
+
+    if confirmed_ids:
+        save_pending(pending)
+    else:
         print("확정할 반응 없음")
 
 
