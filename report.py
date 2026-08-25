@@ -161,13 +161,15 @@ def build_report(main_videos, sub_videos, week_str):
             },
             {"name": "📊 Total", "value": f"풀영상 {total_long}개\n쇼츠 {total_shorts}개"},
         ],
-        "footer": {"text": "메모 / 썸네일러 이름은 이 메시지의 스레드에 답글로 남겨주세요"},
+        "footer": {"text": "메모 / 썸네일러 이름은 이 메시지 우클릭 → 스레드 만들기로 남겨주세요"},
     }
     return embed
 
 
-def send_to_discord(embed, week_str):
-    payload = {"embeds": [embed], "thread_name": f"{week_str} 주간 보고"}
+def send_to_discord(embed):
+    # thread_name은 포럼 채널 웹훅에서만 동작해서(일반 텍스트 채널은 400 에러) 쓰지 않음.
+    # 메모/썸네일러 이름을 남기고 싶으면 이 메시지를 우클릭 -> "스레드 만들기"로 직접 시작하면 됨.
+    payload = {"embeds": [embed]}
     r = requests.post(DISCORD_WEBHOOK_URL, params={"wait": "true"}, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()
@@ -187,7 +189,7 @@ def main():
     sub_videos = fetch_video_details(sub_ids)
 
     embed = build_report(main_videos, sub_videos, week_str)
-    result = send_to_discord(embed, week_str)
+    result = send_to_discord(embed)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
