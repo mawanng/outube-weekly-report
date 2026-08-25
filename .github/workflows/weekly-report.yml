@@ -1,0 +1,29 @@
+name: 유튜브 주간 업로드 보고
+
+on:
+  schedule:
+    # 매주 토요일 15:00 UTC = 매주 일요일 00:00 KST
+    - cron: "0 15 * * 6"
+  workflow_dispatch: {}  # 수동 실행 버튼(테스트용)
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: 보고서 생성 및 디스코드 전송
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # 채널 ID는 비밀 정보가 아니라 report.py 안에 기본값으로 이미 들어있음.
+          # 다른 채널로 바꾸고 싶을 때만 아래 두 줄의 주석을 풀고 값을 채우면 됨.
+          # MAIN_CHANNEL_ID: "UCxxxxxxxxxxxxxxxxxxxxxx"
+          # SUB_CHANNEL_ID: "UCxxxxxxxxxxxxxxxxxxxxxx"
+        run: python report.py
