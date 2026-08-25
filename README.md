@@ -115,8 +115,18 @@ git push -u origin main
 `weekly-report.yml`에 설정된 크론(`매주 토요일 15:00 UTC = 일요일 00:00 KST`)에
 따라 **자동으로** 매주 실행됩니다. 아무것도 더 안 하셔도 됩니다.
 
-## 쇼츠/풀영상 판정 기준
+## 쇼츠/롱폼(풀영상) 판정 기준
 
-영상 제목·설명·태그 어디든 `#shorts`가 포함돼 있으면 쇼츠로, 없으면
-풀영상으로 분류합니다. 기준을 바꾸고 싶으면 `report.py`의
-`is_shorts()` 함수를 수정하면 됩니다.
+각 채널의 "쇼츠 재생목록"에 들어있는 영상이면 쇼츠, 아니면 롱폼(풀영상)으로
+분류합니다. 현재 등록된 재생목록:
+
+- 본채널 쇼츠: `MAIN_SHORTS_PLAYLIST_ID` (기본값 `PLqE7uvTHaH30qYSSVmxsjV6JrlUUInv_f`)
+- 봉풀주 쇼츠: `SUB_SHORTS_PLAYLIST_ID` (기본값 `PLQCedlY19W03Zpo5l4MYInmwqiqJQnO75`)
+
+즉, **새로 올린 쇼츠는 해당 재생목록에 넣어줘야** 보고서에서 쇼츠로 잡힙니다.
+재생목록을 바꾸고 싶으면 `.github/workflows/weekly-report.yml`에 같은 이름의
+env 값을 추가해서 덮어쓰면 됩니다(채널 ID와 동일한 방식).
+
+## 영상 제목 클릭
+
+보고 메시지의 영상 제목을 클릭하면 바로 유튜브 영상 링크로 연결됩니다.
