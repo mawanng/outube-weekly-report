@@ -3,7 +3,7 @@ name: 유튜브 주간 업로드 보고
 on:
   schedule:
     # 매주 토요일 15:00 UTC = 매주 일요일 00:00 KST
-    - cron: "0 15 * * 6"
+    - cron: "7 17 * * 6"
   workflow_dispatch:  # 수동 실행 버튼(테스트용)
     inputs:
       test_date:
