@@ -1,0 +1,23 @@
+name: 옛 실행 로그 전부 삭제 (일회용)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 현재 실행을 제외한 모든 워크플로 실행 기록 삭제
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CURRENT: ${{ github.run_id }}
+        run: |
+          gh api --paginate "repos/$REPO/actions/runs?per_page=100" --jq '.workflow_runs[].id' > ids.txt
+          echo "삭제 대상: $(grep -vx "$CURRENT" ids.txt | wc -l)개"
+          grep -vx "$CURRENT" ids.txt | while read id; do
+            gh api -X DELETE "repos/$REPO/actions/runs/$id" --silent || echo "실패: $id"
+          done
