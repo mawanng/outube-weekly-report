@@ -1,1 +1,38 @@
-{}
+{
+  "1558578171614461973": {
+    "summary_message_id": "1558578170607697921",
+    "video_id": "NgBaS1vXZ54",
+    "category": "썸네일러",
+    "option_set": "thumbnailer"
+  },
+  "1558578177255936072": {
+    "summary_message_id": "1558578170607697921",
+    "video_id": "6Xt6Ej6owng",
+    "category": "제작자",
+    "option_set": "creator"
+  },
+  "1558578185518583850": {
+    "summary_message_id": "1558578170607697921",
+    "video_id": "JFoN5JGTQLk",
+    "category": "제작자",
+    "option_set": "creator"
+  },
+  "1558578194427154446": {
+    "summary_message_id": "1558578193508737116",
+    "video_id": "DI5H9P7n8Pg",
+    "category": "제작자",
+    "option_set": "creator"
+  },
+  "1558578203847692329": {
+    "summary_message_id": "1558578193508737116",
+    "video_id": "7A6Itiq-ut8",
+    "category": "제작자",
+    "option_set": "creator"
+  },
+  "1558578211749634230": {
+    "summary_message_id": "1558578193508737116",
+    "video_id": "LTUqr20R5kU",
+    "category": "제작자",
+    "option_set": "creator"
+  }
+}
