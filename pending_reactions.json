@@ -1,1 +1,20 @@
-{}
+{
+  "1566186554102259785": {
+    "summary_message_id": "1566186552680255579",
+    "video_id": "LJORBFCMIkA",
+    "category": "썸네일러",
+    "option_set": "thumbnailer"
+  },
+  "1566186560599101451": {
+    "summary_message_id": "1566186552680255579",
+    "video_id": "xXFtMu9YCb0",
+    "category": "제작자",
+    "option_set": "creator"
+  },
+  "1566186569663127753": {
+    "summary_message_id": "1566186552680255579",
+    "video_id": "IrzAiwGSnRg",
+    "category": "제작자",
+    "option_set": "creator"
+  }
+}
