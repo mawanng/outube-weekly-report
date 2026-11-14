@@ -1,1 +1,26 @@
-{}
+{
+  "1571273156692545549": {
+    "summary_message_id": "1571273155928916111",
+    "video_id": "_nA4EnY65v0",
+    "category": "썸네일러",
+    "option_set": "thumbnailer"
+  },
+  "1571273164682698824": {
+    "summary_message_id": "1571273155928916111",
+    "video_id": "W2c7W7sMPtE",
+    "category": "썸네일러",
+    "option_set": "thumbnailer"
+  },
+  "1571273170990792745": {
+    "summary_message_id": "1571273155928916111",
+    "video_id": "nbvPinMvJow",
+    "category": "제작자",
+    "option_set": "creator"
+  },
+  "1571273178125312162": {
+    "summary_message_id": "1571273155928916111",
+    "video_id": "-hzDddkSU8o",
+    "category": "제작자",
+    "option_set": "creator"
+  }
+}
